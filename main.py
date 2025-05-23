@@ -53,11 +53,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
     except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-    finally:
-        # Получаем текущий event loop
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если loop запущен, создаем новую задачу для его остановки
-            loop.create_task(asyncio.sleep(0))
-        loop.close() 
+        logger.error(f"Ошибка при запуске бота: {e}") 
