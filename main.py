@@ -27,29 +27,26 @@ async def delete_join_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Ошибка при удалении сообщения: {e}")
 
-async def main():
+def main():
     """
     Основная функция запуска бота
     """
+    # Запускаем Flask-сервер для поддержания работы
+    keep_alive()
+    
     # Создаем приложение
     application = Application.builder().token(TOKEN).build()
 
     # Добавляем обработчик сообщений
     application.add_handler(MessageHandler(filters.ALL, delete_join_messages))
 
-    # Запускаем Flask-сервер для поддержания работы
-    keep_alive()
-    
     # Запускаем бота
     logger.info("Бот запущен")
-    await application.initialize()
-    await application.start()
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    import asyncio
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
     except Exception as e:
