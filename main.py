@@ -21,9 +21,12 @@ def load_members():
     try:
         with open('group_members.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
+            # Выводим содержимое файла в логи
+            logger.info(f"Загружен список участников: {json.dumps(data, indent=4, ensure_ascii=False)}")
             # Преобразуем списки обратно в множества
             return {int(k): set(v) for k, v in data['group_members'].items()}
     except FileNotFoundError:
+        logger.info("Файл group_members.json не найден, создаем новый")
         return defaultdict(set)
     except Exception as e:
         logger.error(f"Ошибка при загрузке списка участников: {e}")
@@ -39,6 +42,8 @@ def save_members(members_dict):
         }
         with open('group_members.json', 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
+        # Выводим обновленное содержимое в логи
+        logger.info(f"Список участников обновлен: {json.dumps(data, indent=4, ensure_ascii=False)}")
     except Exception as e:
         logger.error(f"Ошибка при сохранении списка участников: {e}")
 
@@ -56,6 +61,7 @@ async def delete_join_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             for member in update.message.new_chat_members:
                 if not member.is_bot:  # Игнорируем ботов
                     group_members[update.message.chat_id].add(member.id)
+                    logger.info(f"Добавлен участник {member.first_name} в группу {update.message.chat.title}")
             # Сохраняем изменения
             save_members(group_members)
             # Удаляем сообщение
@@ -76,6 +82,8 @@ async def handle_left_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # Сохраняем изменения
                 save_members(group_members)
                 logger.info(f"Участник {member.first_name} удален из списка группы {update.message.chat.title}")
+                # Отправляем сообщение о выходе
+                await update.message.reply_text(f"Участник {member.first_name} покинул группу")
     except Exception as e:
         logger.error(f"Ошибка при обработке выхода участника: {e}")
 
@@ -114,6 +122,12 @@ async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при обработке упоминания: {e}")
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик ошибок
+    """
+    logger.error(f"Произошла ошибка: {context.error}")
+
 def main():
     """
     Основная функция запуска бота
@@ -128,6 +142,9 @@ def main():
     application.add_handler(MessageHandler(filters.ALL, delete_join_messages))
     application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, handle_left_member))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_mention))
+    
+    # Добавляем обработчик ошибок
+    application.add_error_handler(error_handler)
 
     # Запускаем бота
     logger.info("Бот запущен")
