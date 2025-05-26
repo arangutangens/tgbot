@@ -1,11 +1,9 @@
 import logging
 import os
-import json
-import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import json # Добавлено для работы с JSON
+from telegram import Update, ParseMode
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from background import keep_alive
-from collections import defaultdict
 
 # Настройка логирования
 logging.basicConfig(
@@ -16,141 +14,155 @@ logger = logging.getLogger(__name__)
 
 # Получаем токен из переменных окружения
 TOKEN = os.environ['TELEGRAM_TOKEN']
+BOT_USERNAME = "joinmadsbot"  # Имя вашего бота для упоминания
+MEMBERS_FILE = "chat_members.json" # Файл для хранения данных об участниках
 
-# Словарь для хранения участников групп
-group_members = {}
-
-def load_members():
-    """Загрузка списка участников из файла"""
-    global group_members
+# --- Функции для работы с файлом данных --- #
+def load_members_from_file() -> dict:
+    """Загружает данные об участниках из JSON-файла."""
     try:
-        if os.path.exists('group_members.json'):
-            with open('group_members.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                group_members = data.get('group_members', {})
-                logger.info(f"Загружен список участников: {json.dumps(data, ensure_ascii=False)}")
+        if os.path.exists(MEMBERS_FILE):
+            with open(MEMBERS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        logger.error(f"Ошибка при загрузке данных из {MEMBERS_FILE}: {e}")
+        return {} # Возвращаем пустой словарь в случае ошибки
+
+def save_members_to_file(data: dict):
+    """Сохраняет данные об участниках в JSON-файл."""
+    try:
+        with open(MEMBERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except IOError as e:
+        logger.error(f"Ошибка при сохранении данных в {MEMBERS_FILE}: {e}")
+
+# --- Вспомогательные функции --- #
+def escape_markdown_v2(text: str) -> str:
+    """Экранирует специальные символы для MarkdownV2."""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return "".join(['\\' + char if char in escape_chars else char for char in text])
+
+# --- Обработчики --- #
+async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает новых участников: добавляет в список (в bot_data и файл) и удаляет сообщение о входе."""
+    if not update.message or not update.message.new_chat_members:
+        return
+
+    chat_id_str = str(update.message.chat_id)
+    all_chat_members = context.bot_data.get('all_chat_members', {})
+    current_chat_members = all_chat_members.setdefault(chat_id_str, {})
+
+    member_added = False
+    for member in update.message.new_chat_members:
+        if not member.is_bot:
+            member_id_str = str(member.id)
+            current_chat_members[member_id_str] = {'id': member.id, 'name': member.first_name}
+            logger.info(f"Пользователь {member.first_name} (ID: {member.id}) добавлен в список участников чата {update.message.chat.title} (ID: {chat_id_str})")
+            member_added = True
         else:
-            group_members = {}
-            logger.info("Файл group_members.json не найден, создан пустой список участников")
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке списка участников: {e}")
-        group_members = {}
+            logger.info(f"Бот {member.first_name} (ID: {member.id}) присоединился к чату {update.message.chat.title}, не добавляю в список.")
 
-def save_members():
-    """Сохранение списка участников в файл"""
+    if member_added:
+        context.bot_data['all_chat_members'] = all_chat_members # Обновляем bot_data
+        save_members_to_file(all_chat_members)
+
     try:
-        with open('group_members.json', 'w', encoding='utf-8') as f:
-            json.dump({'group_members': group_members}, f, ensure_ascii=False, indent=4)
-        logger.info(f"Список участников сохранен: {json.dumps({'group_members': group_members}, ensure_ascii=False)}")
+        await update.message.delete()
+        logger.info(f"Удалено сообщение о вступлении в группу {update.message.chat.title}")
     except Exception as e:
-        logger.error(f"Ошибка при сохранении списка участников: {e}")
+        logger.error(f"Ошибка при удалении сообщения о вступлении: {e}")
 
-async def delete_join_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаление сообщений о новых участниках"""
-    if update.message and update.message.new_chat_members:
+async def handle_left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает вышедших участников: удаляет из списка (из bot_data и файла)."""
+    if not update.message or not update.message.left_chat_member:
+        return
+
+    chat_id_str = str(update.message.chat_id)
+    member_left = update.message.left_chat_member
+    member_id_str = str(member_left.id)
+
+    all_chat_members = context.bot_data.get('all_chat_members', {})
+    current_chat_members = all_chat_members.get(chat_id_str)
+
+    member_removed = False
+    if current_chat_members and member_id_str in current_chat_members:
+        del current_chat_members[member_id_str]
+        logger.info(f"Пользователь {member_left.first_name} (ID: {member_left.id}) удален из списка участников чата {update.message.chat.title} (ID: {chat_id_str})")
+        if not current_chat_members: # Если чат стал пустым, удаляем его из общего списка
+            del all_chat_members[chat_id_str]
+        member_removed = True
+    
+    if member_removed:
+        context.bot_data['all_chat_members'] = all_chat_members
+        save_members_to_file(all_chat_members)
+
+    # Опционально: удаление сообщения о выходе
+    # try:
+    #     await update.message.delete()
+    #     logger.info(f"Удалено сообщение о выходе {member_left.first_name} из группы {update.message.chat.title}")
+    # except Exception as e:
+    #     logger.error(f"Ошибка при удалении сообщения о выходе: {e}")
+
+async def handle_bot_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает упоминание бота и отправляет список участников из bot_data."""
+    if not update.message:
+        return
+        
+    chat_id_str = str(update.message.chat_id)
+    all_chat_members = context.bot_data.get('all_chat_members', {})
+    members_map = all_chat_members.get(chat_id_str, {})
+    
+    if not members_map:
+        await update.message.reply_text("В списке участников для этого чата пока никого нет (возможно, список еще не загружен или пуст).")
+        return
+
+    member_infos = list(members_map.values())
+    mentions = []
+    for member_info in member_infos:
+        user_id = member_info['id']
+        name = member_info.get('name', f'User {user_id}')
+        escaped_name = escape_markdown_v2(name)
+        mentions.append(f"[{escaped_name}](tg://user?id={user_id})")
+
+    if not mentions:
+        await update.message.reply_text("Некого упоминать в этом чате.")
+        return
+
+    logger.info(f"Получено упоминание от {update.effective_user.first_name}. Упоминаю {len(mentions)} участников в чате {update.message.chat.title} (ID: {chat_id_str}).")
+
+    chunk_size = 45  # Снизил для большей надежности с учетом длины имен и Markdown
+    for i in range(0, len(mentions), chunk_size):
+        chunk = mentions[i:i + chunk_size]
+        message_text = ", ".join(chunk)
         try:
-            await update.message.delete()
-            logger.info(f"Удалено сообщение о новом участнике в группе {update.message.chat_id}")
-            
-            # Добавляем новых участников в список
-            chat_id = str(update.message.chat_id)
-            if chat_id not in group_members:
-                group_members[chat_id] = []
-            
-            for member in update.message.new_chat_members:
-                if member.id not in group_members[chat_id]:
-                    group_members[chat_id].append(member.id)
-                    logger.info(f"Добавлен участник {member.id} в группу {chat_id}")
-            
-            save_members()
-            
+            await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN_V2)
         except Exception as e:
-            logger.error(f"Ошибка при удалении сообщения: {e}")
+            logger.error(f"Ошибка при отправке сообщения с упоминаниями: {e}")
+            await update.message.reply_text("Произошла ошибка при формировании списка упоминаний.")
 
-async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выхода участника из группы"""
-    if update.message and update.message.left_chat_member:
-        try:
-            chat_id = str(update.message.chat_id)
-            member_id = update.message.left_chat_member.id
-            
-            if chat_id in group_members and member_id in group_members[chat_id]:
-                group_members[chat_id].remove(member_id)
-                logger.info(f"Удален участник {member_id} из группы {chat_id}")
-                save_members()
-            
-            await update.message.delete()
-            logger.info(f"Удалено сообщение о выходе участника из группы {chat_id}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке выхода участника: {e}")
+def main():
+    """Основная функция запуска бота"""
+    keep_alive()
+    
+    application = Application.builder().token(TOKEN).build()
 
-async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка упоминания бота"""
-    if update.message and update.message.text:
-        try:
-            bot = await context.bot.get_me()
-            bot_username = bot.username
-            logger.info(f"Проверка упоминания. Username бота: {bot_username}, текст сообщения: {update.message.text}")
-            
-            if f"@{bot_username}" in update.message.text:
-                chat_id = str(update.message.chat_id)
-                if chat_id in group_members and group_members[chat_id]:
-                    members_text = ", ".join([f"@{member_id}" for member_id in group_members[chat_id]])
-                    await update.message.reply_text(f"Список участников группы:\n{members_text}")
-                    logger.info(f"Отправлен список участников для группы {chat_id}")
-                else:
-                    await update.message.reply_text("В группе пока нет участников")
-                    logger.info(f"Группа {chat_id} пуста")
-        except Exception as e:
-            logger.error(f"Ошибка при обработке упоминания: {e}")
+    # Загружаем данные об участниках при старте и сохраняем в bot_data
+    application.bot_data['all_chat_members'] = load_members_from_file()
+    logger.info(f"Данные об участниках загружены из {MEMBERS_FILE}.")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Обработчик ошибок
-    """
-    logger.error(f"Произошла ошибка: {context.error}")
-
-async def main():
-    """
-    Основная функция запуска бота
-    """
-    try:
-        # Загружаем список участников при запуске
-        load_members()
-        
-        # Запускаем Flask-сервер для поддержания работы
-        keep_alive()
-        
-        # Создаем приложение
-        application = Application.builder().token(TOKEN).build()
-
-        # Добавляем обработчики
-        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, delete_join_messages))
-        application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, handle_member_left))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_mention))
-        
-        # Добавляем обработчик ошибок
-        application.add_error_handler(error_handler)
-
-        # Запускаем бота
-        logger.info("Бот запущен")
-        
-        # Очищаем предыдущие обновления и запускаем бота
-        await application.bot.delete_webhook(drop_pending_updates=True)
-        await application.initialize()
-        await application.start()
-        await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-        # Пробуем перезапустить бота
-        await application.stop()
-        await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Обработчики
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_chat_members))
+    application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, handle_left_chat_member))
+    application.add_handler(MessageHandler(filters.Regex(f'@{BOT_USERNAME}'), handle_bot_mention))
+    
+    logger.info("Бот запущен с сохранением данных участников в файл.")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
-        logger.info("Бот остановлен")
+        logger.info("Бот остановлен.")
     except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}") 
+        logger.error(f"Ошибка при запуске бота: {e}", exc_info=True) 
