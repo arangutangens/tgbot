@@ -128,7 +128,10 @@ def main():
 
     # Запускаем бота
     logger.info("Бот запущен")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+    # Очищаем предыдущие обновления и запускаем бота
+    application.bot.delete_webhook(drop_pending_updates=True)
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == '__main__':
     try:
