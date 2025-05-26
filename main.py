@@ -1,7 +1,8 @@
 import logging
 import os
 import json # Добавлено для работы с JSON
-from telegram import Update, ParseMode
+from telegram import Update
+from telegram.constants import ParseMode # Изменено расположение ParseMode
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from background import keep_alive
 
