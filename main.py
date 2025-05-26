@@ -88,8 +88,11 @@ async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Проверяем, упомянут ли бот
-        if context.bot.username in update.message.text:
+        bot_username = context.bot.username
+        if f"@{bot_username}" in update.message.text:
             chat_id = update.message.chat_id
+            logger.info(f"Получено упоминание бота в группе {chat_id}")
+            
             if chat_id not in group_members:
                 await update.message.reply_text("В этой группе пока нет участников в списке.")
                 return
@@ -129,9 +132,15 @@ def main():
     # Запускаем бота
     logger.info("Бот запущен")
     
-    # Очищаем предыдущие обновления и запускаем бота
-    application.bot.delete_webhook(drop_pending_updates=True)
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    try:
+        # Очищаем предыдущие обновления и запускаем бота
+        application.bot.delete_webhook(drop_pending_updates=True)
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+        # Пробуем перезапустить бота
+        application.stop()
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == '__main__':
     try:
