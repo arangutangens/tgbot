@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from background import keep_alive
@@ -97,6 +98,8 @@ async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Проверяем, упомянут ли бот
         bot_username = context.bot.username
+        logger.info(f"Проверка упоминания. Username бота: {bot_username}, Текст сообщения: {update.message.text}")
+        
         if f"@{bot_username}" in update.message.text:
             chat_id = update.message.chat_id
             logger.info(f"Получено упоминание бота в группе {chat_id}")
@@ -128,7 +131,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     logger.error(f"Произошла ошибка: {context.error}")
 
-def main():
+async def main():
     """
     Основная функция запуска бота
     """
@@ -151,17 +154,19 @@ def main():
     
     try:
         # Очищаем предыдущие обновления и запускаем бота
-        application.bot.delete_webhook(drop_pending_updates=True)
-        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        await application.initialize()
+        await application.start()
+        await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
         # Пробуем перезапустить бота
-        application.stop()
-        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        await application.stop()
+        await application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == '__main__':
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
     except Exception as e:
